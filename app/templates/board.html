@@ -1,0 +1,25 @@
+<div id="board-shell" class="board-shell">
+  <div class="board" aria-label="Task board">
+    {% for status, tickets in columns.items() %}
+    {% set slug = status|lower|replace(' ', '-') %}
+    <section class="board-column" data-status="{{ status }}" aria-label="{{ status }} tickets">
+      <div class="column-heading"><div class="column-title"><span class="column-dot {{ slug }}"></span><h3>{{ status }}</h3><span class="count">{{ tickets|length }}</span></div><span class="column-more">···</span></div>
+      <div class="card-list">
+        {% for ticket in tickets %}
+        <article class="ticket-card" draggable="true" data-ticket-id="{{ ticket.id }}">
+          <div class="card-top"><span class="ticket-id">T-{{ '%03d'|format(ticket.id) }}</span><span class="priority priority-{{ ticket.priority|lower }}"><span class="priority-dot"></span>{{ ticket.priority }}</span></div>
+          <a class="card-title" href="/tickets/{{ ticket.id }}/edit">{{ ticket.subject }}</a>
+          {% if ticket.description %}<p class="card-description">{{ ticket.description }}</p>{% endif %}
+          <div class="card-footer"><div class="card-meta">{% if ticket.assignee %}<span class="avatar" title="Assigned to {{ ticket.assignee }}">{{ ticket.assignee[:1]|upper }}</span><span class="assignee" title="{{ ticket.assignee }}">{{ ticket.assignee }}</span>{% else %}<span class="unassigned">Unassigned</span>{% endif %}</div>{% if ticket.due_date %}<span class="due-date {% if ticket.due_date < today and status != 'Done' %}overdue{% endif %}">◷ {{ ticket.due_date }}</span>{% endif %}</div>
+          <div class="card-actions"><form class="card-move" action="/tickets/{{ ticket.id }}/move" method="post" hx-post="/tickets/{{ ticket.id }}/move" hx-target="#board-shell" hx-swap="outerHTML"><label>Move to <select name="status" aria-label="Move {{ ticket.subject }}" onchange="this.form.requestSubmit()">{% for item in statuses %}<option value="{{ item }}" {% if status == item %}selected{% endif %}>{{ item }}</option>{% endfor %}</select></label></form><form action="/tickets/{{ ticket.id }}/archive" method="post"><button class="archive-card-button" type="submit" aria-label="Archive {{ ticket.subject }}">Archive</button></form></div>
+        </article>
+        {% else %}
+        <div class="empty-column"><span>＋</span><p>No tickets here yet</p></div>
+        {% endfor %}
+      </div>
+    </section>
+    {% endfor %}
+  </div>
+  {% if q or priority %}<div class="filter-count">Showing {{ columns.values()|map('length')|sum }} matching ticket(s).</div>{% endif %}
+</div>
+{% if request.headers.get('HX-Request') == 'true' %}<span id="total-count" hx-swap-oob="innerHTML">{{ total }}</span><span id="completed-count" hx-swap-oob="innerHTML">{{ completed }}</span>{% endif %}

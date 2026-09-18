@@ -1,0 +1,13 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Containerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ticket_data:/app/data:U
+    restart: unless-stopped
+
+volumes:
+  ticket_data:

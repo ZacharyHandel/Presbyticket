@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Completed ticket reports · Presby Ticket{% endblock %}
+{% block content %}
+<header class="topbar"><div class="breadcrumbs"><a href="/">Workspace</a> <span>/</span> <strong>Reports</strong></div><div class="topbar-right"><button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to dark mode" aria-pressed="false"><span class="theme-icon" aria-hidden="true">☾</span><span class="theme-label">Dark mode</span></button></div></header>
+<div class="page-content report-page">
+  <div class="page-heading"><div><div class="eyebrow">COMPLETED WORK</div><h1>Drop report<span class="heading-period">.</span></h1><p class="subtitle">Choose finished tickets and create a text block for your update email.</p></div></div>
+  <form action="/reports/preview" method="post" class="report-form">
+    <div class="report-panel"><label class="report-title-label" for="drop-name">Drop name<input id="drop-name" name="drop_name" maxlength="100" value="{{ drop_name }}" placeholder="For example: September website update"></label><div class="report-list-heading"><div><h2>Completed tickets</h2><p>Select the work to include in this drop.</p></div>{% if tickets %}<button type="button" class="text-button" data-select-all>Select all</button>{% endif %}</div>
+    {% if tickets %}<div class="report-ticket-list">{% for ticket in tickets %}<label class="report-ticket"><input type="checkbox" name="ticket_ids" value="{{ ticket.id }}" {% if ticket.id in selected_ids %}checked{% endif %}><span class="report-ticket-info"><strong>{{ ticket.subject }}</strong><span>Completed {{ ticket.completed_at[:10] if ticket.completed_at else 'date unavailable' }}{% if ticket.archived_at %} · Archived{% endif %}{% if ticket.completion_notes %} · Has completion notes{% endif %}</span></span><span class="priority priority-{{ ticket.priority|lower }}">{{ ticket.priority }}</span></label>{% endfor %}</div>{% else %}<div class="report-empty"><strong>No completed tickets yet</strong><p>Move a ticket to Done on the <a href="/">board</a>, then return here to prepare a report.</p></div>{% endif %}
+    {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}<div class="report-actions"><button type="submit" class="primary-button" {% if not tickets %}disabled{% endif %}>Generate report</button></div></div>
+  </form>
+  {% if report %}<section class="report-output" aria-labelledby="report-output-title"><div class="report-output-head"><div><h2 id="report-output-title">Email text</h2><p>Review the text, then copy and paste it into your email.</p></div><button type="button" class="secondary-button" data-copy-report>Copy text</button></div><textarea id="report-text" readonly aria-label="Generated report text">{{ report }}</textarea><p class="copy-status" role="status" aria-live="polite"></p></section>{% endif %}
+</div>
+{% endblock %}

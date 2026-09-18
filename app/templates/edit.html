@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Edit T-{{ '%03d'|format(ticket.id) }} · Presby Ticket{% endblock %}
+{% block content %}
+<header class="topbar"><div class="breadcrumbs"><a href="/">Workspace</a> <span>/</span> <a href="{{ '/archive' if ticket.archived_at else '/' }}">{{ 'Archive' if ticket.archived_at else 'Board' }}</a> <span>/</span> <strong>T-{{ '%03d'|format(ticket.id) }}</strong></div><div class="topbar-right"><button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to dark mode" aria-pressed="false"><span class="theme-icon" aria-hidden="true">☾</span><span class="theme-label">Dark mode</span></button></div></header>
+<div class="page-content edit-page">
+  <a href="{{ '/archive' if ticket.archived_at else '/' }}" class="back-link">← Back to {{ 'archive' if ticket.archived_at else 'board' }}</a>
+  <div class="edit-heading"><div class="eyebrow">TICKET T-{{ '%03d'|format(ticket.id) }}{% if ticket.archived_at %} · ARCHIVED{% endif %}</div><h1>Edit ticket<span class="heading-period">.</span></h1><p class="subtitle">Update the task details and its place on the board.</p></div>
+  <div class="edit-panel">
+    <form method="post" action="/tickets/{{ ticket.id }}/edit" class="ticket-form">
+      <label>Subject <span>*</span><input name="subject" maxlength="120" required value="{{ ticket.subject }}"></label>
+      <label>Description<textarea name="description" maxlength="5000" rows="6">{{ ticket.description }}</textarea></label>
+      <div class="form-grid"><label>Priority<select name="priority">{% for item in priorities %}<option {% if ticket.priority == item %}selected{% endif %}>{{ item }}</option>{% endfor %}</select></label><label>Status<select name="status">{% for item in statuses %}<option {% if ticket.status == item %}selected{% endif %}>{{ item }}</option>{% endfor %}</select></label></div>
+      <div class="form-grid"><label>Assignee<input name="assignee" maxlength="80" value="{{ ticket.assignee }}" placeholder="Who owns this?"></label><label>Due date<input type="date" name="due_date" value="{{ ticket.due_date }}"></label></div>
+      <label>Completion notes <small>Optional details about what was delivered</small><textarea name="completion_notes" maxlength="5000" rows="4" placeholder="Summarize the completed work for the drop report...">{{ ticket.completion_notes }}</textarea></label>
+      <div class="form-actions"><a class="secondary-button" href="{{ '/archive' if ticket.archived_at else '/' }}">Cancel</a><button class="primary-button" type="submit">Save changes</button></div>
+    </form>
+    <div class="archive-zone"><div><strong>{{ 'Restore ticket' if ticket.archived_at else 'Archive ticket' }}</strong><p>{{ 'Return this ticket to the active board.' if ticket.archived_at else 'Remove it from the board while keeping its history and report details.' }}</p></div><form action="/tickets/{{ ticket.id }}/{{ 'restore' if ticket.archived_at else 'archive' }}" method="post"><button type="submit" class="secondary-button">{{ 'Restore to board' if ticket.archived_at else 'Archive ticket' }}</button></form></div>
+    <div class="danger-zone"><div><strong>Delete ticket</strong><p>This permanently removes the ticket.</p></div><form action="/tickets/{{ ticket.id }}/delete" method="post" onsubmit="return confirm('Delete this ticket?')"><button type="submit" class="danger-button">Delete ticket</button></form></div>
+  </div>
+</div>
+{% endblock %}

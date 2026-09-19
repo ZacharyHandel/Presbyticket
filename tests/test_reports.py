@@ -151,6 +151,28 @@ class ReportTests(unittest.TestCase):
             main.check_recurring(1, 1)
         self.assertEqual(error.exception.status_code, 409)
 
+    def test_boards_keep_tickets_separate_and_recurring_groups_follow_boards(self):
+        main.initialize_database()
+        response = main.create_board("Website")
+        self.assertEqual(response.headers["location"], "/boards/2")
+        main.create_ticket(self.request(), "Workspace repeat", "", "Medium", "", "", True, 1)
+        main.create_ticket(self.request(), "Website repeat", "", "High", "", "", True, 2)
+        main.create_ticket(self.request(), "Website task", "", "Low", "", "", False, 2)
+
+        self.assertEqual(main.board_context(self.request(), 1)["total"], 0)
+        website = main.board_context(self.request(), 2)
+        self.assertEqual(website["board"]["name"], "Website")
+        self.assertEqual([ticket["subject"] for ticket in website["columns"]["Backlog"]], ["Website task"])
+        with main.db() as connection:
+            groups = {
+                board["name"]: connection.execute(
+                    "SELECT subject FROM tickets WHERE board_id = ? AND is_recurring = 1", (board["id"],)
+                ).fetchall()
+                for board in main.all_boards()
+            }
+        self.assertEqual([ticket["subject"] for ticket in groups["Workspace"]], ["Workspace repeat"])
+        self.assertEqual([ticket["subject"] for ticket in groups["Website"]], ["Website repeat"])
+
 
 if __name__ == "__main__":
     unittest.main()

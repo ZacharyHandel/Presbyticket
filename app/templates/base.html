@@ -13,8 +13,11 @@
   <div class="app-shell">
     <aside class="sidebar">
       <a class="brand" href="/" aria-label="Presby Ticket home"><span class="brand-mark">P<span>.</span></span><span>presby<span class="brand-light">ticket</span></span></a>
-      <div class="sidebar-label">WORKSPACE</div>
-      <nav aria-label="Main navigation"><a class="nav-link {% if not request.url.path.startswith('/reports') and not request.url.path.startswith('/archive') and not request.url.path.startswith('/recurring') %}active{% endif %}" href="/"><span class="nav-icon">▦</span> Board <span class="nav-arrow">↗</span></a><a class="nav-link {% if request.url.path.startswith('/recurring') %}active{% endif %}" href="/recurring"><span class="nav-icon">↻</span> Recurring <span class="nav-arrow">↗</span></a><a class="nav-link {% if request.url.path.startswith('/reports') %}active{% endif %}" href="/reports"><span class="nav-icon">▤</span> Reports <span class="nav-arrow">↗</span></a><a class="nav-link {% if request.url.path.startswith('/archive') %}active{% endif %}" href="/archive"><span class="nav-icon">▥</span> Archive <span class="nav-arrow">↗</span></a></nav>
+      <div class="sidebar-label">BOARDS</div>
+      <nav class="board-nav" aria-label="Boards">{% for item in navigation_boards() %}<a class="nav-link {% if request.url.path == ('/' if item.id == 1 else '/boards/' ~ item.id) %}active{% endif %}" href="{{ '/' if item.id == 1 else '/boards/' ~ item.id }}"><span class="nav-icon">▦</span> {{ item.name }}</a>{% endfor %}</nav>
+      <form class="new-board-form" action="/boards" method="post"><input name="name" maxlength="80" required aria-label="New board name" placeholder="New project board"><button type="submit" aria-label="Create board">＋</button></form>
+      <div class="sidebar-label workspace-tools">WORKSPACE</div>
+      <nav aria-label="Workspace tools"><a class="nav-link {% if request.url.path.startswith('/recurring') %}active{% endif %}" href="/recurring"><span class="nav-icon">↻</span> Recurring <span class="nav-arrow">↗</span></a><a class="nav-link {% if request.url.path.startswith('/reports') %}active{% endif %}" href="/reports"><span class="nav-icon">▤</span> Reports <span class="nav-arrow">↗</span></a><a class="nav-link {% if request.url.path.startswith('/archive') %}active{% endif %}" href="/archive"><span class="nav-icon">▥</span> Archive <span class="nav-arrow">↗</span></a></nav>
       <div class="sidebar-bottom"><div class="side-tip"><span class="tip-icon">✦</span><strong>Keep things moving.</strong><p>Capture the work, choose a priority, and move it across the board.</p></div><span class="sidebar-footer">Simple work, clearly tracked.</span></div>
     </aside>
     <main class="main">{% block content %}{% endblock %}</main>

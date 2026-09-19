@@ -6,6 +6,10 @@ To prepare a drop email, move tickets to **Done**, optionally add completion not
 
 To clear tickets from the active board without losing them, use **Archive** on a board card or its edit page. The **Archive** section lets you search, edit, and restore archived tickets. Completed archived tickets remain available in Reports.
 
+On a ticket's edit page, **Ticket links** lets you connect it to another ticket as **Blocks** or **Is blocked by**. Both ticket pages show the relationship, and board cards show a badge while their blockers are unfinished. Links stay intact when tickets are archived and are removed when a ticket is deleted. Self-links, duplicate links, and dependency cycles are rejected. Links are informational; they do not prevent a ticket from being moved to Done.
+
+Mark a ticket as **Recurring task** when creating or editing it. Recurring tickets appear only in the **Recurring** section, outside the Kanban board and its counts. The section has a persistent checklist: check or uncheck an item individually, or use **Uncheck all** to start another cycle. Checklist marks do not change ticket status. Archived tickets are hidden from the active checklist until restored.
+
 ## Run with Podman
 
 ```bash

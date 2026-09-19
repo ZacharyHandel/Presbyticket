@@ -28,6 +28,7 @@ def db():
     DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DATABASE_PATH)
     connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
     try:
         yield connection
         connection.commit()
@@ -50,6 +51,9 @@ def initialize_database():
                 completion_notes TEXT NOT NULL DEFAULT '',
                 completed_at TEXT NOT NULL DEFAULT '',
                 archived_at TEXT NOT NULL DEFAULT '',
+                is_recurring INTEGER NOT NULL DEFAULT 0,
+                recurring_checked INTEGER NOT NULL DEFAULT 0,
+                recurring_checked_at TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )"""
@@ -61,7 +65,23 @@ def initialize_database():
             connection.execute("ALTER TABLE tickets ADD COLUMN completed_at TEXT NOT NULL DEFAULT ''")
         if "archived_at" not in columns:
             connection.execute("ALTER TABLE tickets ADD COLUMN archived_at TEXT NOT NULL DEFAULT ''")
+        if "is_recurring" not in columns:
+            connection.execute("ALTER TABLE tickets ADD COLUMN is_recurring INTEGER NOT NULL DEFAULT 0")
+        if "recurring_checked" not in columns:
+            connection.execute("ALTER TABLE tickets ADD COLUMN recurring_checked INTEGER NOT NULL DEFAULT 0")
+        if "recurring_checked_at" not in columns:
+            connection.execute("ALTER TABLE tickets ADD COLUMN recurring_checked_at TEXT NOT NULL DEFAULT ''")
         connection.execute("UPDATE tickets SET completed_at = updated_at WHERE status = 'Done' AND completed_at = ''")
+        connection.execute(
+            """CREATE TABLE IF NOT EXISTS ticket_links (
+                blocker_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+                blocked_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (blocker_id, blocked_id),
+                CHECK (blocker_id != blocked_id)
+            )"""
+        )
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_ticket_links_blocked ON ticket_links(blocked_id)")
 
 
 def validate_ticket(subject: str, description: str, priority: str, due_date: str) -> tuple[str, str]:
@@ -119,7 +139,11 @@ def board_context(request: Request, q: str = "", priority: str = "") -> dict:
     q = q.strip()[:120]
     if priority not in PRIORITIES:
         priority = ""
-    sql = "SELECT * FROM tickets WHERE archived_at = ''"
+    sql = """SELECT tickets.*, (
+        SELECT COUNT(*) FROM ticket_links AS links
+        JOIN tickets AS blocker ON blocker.id = links.blocker_id
+        WHERE links.blocked_id = tickets.id AND blocker.status != 'Done'
+    ) AS open_blockers FROM tickets WHERE archived_at = '' AND is_recurring = 0"""
     params: list[str] = []
     if q:
         sql += " AND (subject LIKE ? OR description LIKE ? OR assignee LIKE ?)"
@@ -130,8 +154,8 @@ def board_context(request: Request, q: str = "", priority: str = "") -> dict:
     sql += " ORDER BY CASE priority WHEN 'Urgent' THEN 0 WHEN 'High' THEN 1 WHEN 'Medium' THEN 2 ELSE 3 END, due_date = '', due_date, id DESC"
     with db() as connection:
         tickets = connection.execute(sql, params).fetchall()
-        total = connection.execute("SELECT COUNT(*) FROM tickets WHERE archived_at = ''").fetchone()[0]
-        completed = connection.execute("SELECT COUNT(*) FROM tickets WHERE status = 'Done' AND archived_at = ''").fetchone()[0]
+        total = connection.execute("SELECT COUNT(*) FROM tickets WHERE archived_at = '' AND is_recurring = 0").fetchone()[0]
+        completed = connection.execute("SELECT COUNT(*) FROM tickets WHERE status = 'Done' AND archived_at = '' AND is_recurring = 0").fetchone()[0]
     columns = {status: [ticket for ticket in tickets if ticket["status"] == status] for status in STATUSES}
     return {"request": request, "columns": columns, "statuses": STATUSES, "priorities": PRIORITIES,
             "q": q, "priority": priority, "total": total, "completed": completed, "today": date.today().isoformat()}
@@ -165,6 +189,43 @@ def archive(request: Request, q: str = ""):
     return templates.TemplateResponse(request, "archive.html", {"tickets": tickets, "count": count, "q": q})
 
 
+@app.get("/recurring", response_class=HTMLResponse)
+def recurring(request: Request):
+    with db() as connection:
+        tickets = connection.execute(
+            """SELECT * FROM tickets WHERE is_recurring = 1 AND archived_at = ''
+            ORDER BY recurring_checked, CASE priority WHEN 'Urgent' THEN 0 WHEN 'High' THEN 1 WHEN 'Medium' THEN 2 ELSE 3 END, id DESC"""
+        ).fetchall()
+    checked = sum(ticket["recurring_checked"] for ticket in tickets)
+    return templates.TemplateResponse(request, "recurring.html", {"tickets": tickets, "checked": checked, "total": len(tickets)})
+
+
+@app.post("/recurring/uncheck-all")
+def uncheck_all_recurring():
+    with db() as connection:
+        connection.execute(
+            "UPDATE tickets SET recurring_checked = 0, recurring_checked_at = '', updated_at = ? WHERE is_recurring = 1 AND archived_at = '' AND recurring_checked = 1",
+            (datetime.now(timezone.utc).isoformat(timespec="seconds"),),
+        )
+    return RedirectResponse("/recurring", status_code=303)
+
+
+@app.post("/tickets/{ticket_id}/recurring/check")
+def check_recurring(ticket_id: int, checked: Annotated[int, Form()]):
+    if checked not in (0, 1):
+        raise HTTPException(422, "Invalid checklist value.")
+    with db() as connection:
+        ticket = get_ticket(connection, ticket_id)
+        if not ticket["is_recurring"] or ticket["archived_at"]:
+            raise HTTPException(409, "This ticket is not on the active recurring checklist.")
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        connection.execute(
+            "UPDATE tickets SET recurring_checked = ?, recurring_checked_at = ?, updated_at = ? WHERE id = ?",
+            (checked, now if checked else "", now, ticket_id),
+        )
+    return RedirectResponse("/recurring", status_code=303)
+
+
 @app.get("/reports", response_class=HTMLResponse)
 def reports(request: Request):
     return templates.TemplateResponse(request, "reports.html", {"tickets": completed_tickets(), "drop_name": "", "report": "", "selected_ids": set(), "error": ""})
@@ -196,15 +257,20 @@ def create_ticket(
     priority: Annotated[str, Form()] = "Medium",
     assignee: Annotated[str, Form()] = "",
     due_date: Annotated[str, Form()] = "",
+    is_recurring: Annotated[bool, Form()] = False,
 ):
     subject, description = validate_ticket(subject, description, priority, due_date)
     assignee = assignee.strip()[:80]
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with db() as connection:
         connection.execute(
-            "INSERT INTO tickets (subject, description, priority, status, assignee, due_date, created_at, updated_at) VALUES (?, ?, ?, 'Backlog', ?, ?, ?, ?)",
-            (subject, description, priority, assignee, due_date, now, now),
+            "INSERT INTO tickets (subject, description, priority, status, assignee, due_date, is_recurring, created_at, updated_at) VALUES (?, ?, ?, 'Backlog', ?, ?, ?, ?, ?)",
+            (subject, description, priority, assignee, due_date, int(is_recurring), now, now),
         )
+    if is_recurring:
+        if request.headers.get("HX-Request") == "true":
+            return HTMLResponse("", headers={"HX-Redirect": "/recurring"})
+        return RedirectResponse("/recurring", status_code=303)
     response = board_response(request)
     if request.headers.get("HX-Request") == "true":
         response.headers["HX-Trigger"] = "ticketCreated"
@@ -215,7 +281,69 @@ def create_ticket(
 def edit_ticket(request: Request, ticket_id: int):
     with db() as connection:
         ticket = get_ticket(connection, ticket_id)
-    return templates.TemplateResponse(request, "edit.html", {"ticket": ticket, "statuses": STATUSES, "priorities": PRIORITIES})
+        blockers = connection.execute(
+            "SELECT tickets.* FROM ticket_links JOIN tickets ON tickets.id = ticket_links.blocker_id WHERE ticket_links.blocked_id = ? ORDER BY tickets.status = 'Done', tickets.id",
+            (ticket_id,),
+        ).fetchall()
+        blocked_tickets = connection.execute(
+            "SELECT tickets.* FROM ticket_links JOIN tickets ON tickets.id = ticket_links.blocked_id WHERE ticket_links.blocker_id = ? ORDER BY tickets.id",
+            (ticket_id,),
+        ).fetchall()
+        linked_ids = {row["id"] for row in blockers + blocked_tickets}
+        linkable_tickets = [row for row in connection.execute("SELECT id, subject, status, archived_at FROM tickets WHERE id != ? ORDER BY subject", (ticket_id,)) if row["id"] not in linked_ids]
+    return_path = "/archive" if ticket["archived_at"] else "/recurring" if ticket["is_recurring"] else "/"
+    return_label = "Archive" if ticket["archived_at"] else "Recurring" if ticket["is_recurring"] else "Board"
+    errors = {"self": "A ticket cannot link to itself.", "exists": "These tickets are already linked.", "cycle": "This link would create a dependency cycle."}
+    return templates.TemplateResponse(request, "edit.html", {
+        "ticket": ticket, "statuses": STATUSES, "priorities": PRIORITIES,
+        "blockers": blockers, "blocked_tickets": blocked_tickets, "linkable_tickets": linkable_tickets,
+        "link_error": errors.get(request.query_params.get("link_error", ""), ""),
+        "return_path": return_path, "return_label": return_label,
+    })
+
+
+@app.post("/tickets/{ticket_id}/links")
+def add_ticket_link(ticket_id: int, target_id: Annotated[int, Form()], relation: Annotated[str, Form()]):
+    if relation not in ("blocks", "is_blocked_by"):
+        raise HTTPException(422, "Invalid link type.")
+    with db() as connection:
+        get_ticket(connection, ticket_id)
+        get_ticket(connection, target_id)
+        if ticket_id == target_id:
+            return RedirectResponse(f"/tickets/{ticket_id}/edit?link_error=self", status_code=303)
+        blocker_id, blocked_id = (ticket_id, target_id) if relation == "blocks" else (target_id, ticket_id)
+        existing = connection.execute(
+            "SELECT 1 FROM ticket_links WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)",
+            (blocker_id, blocked_id, blocked_id, blocker_id),
+        ).fetchone()
+        if existing:
+            return RedirectResponse(f"/tickets/{ticket_id}/edit?link_error=exists", status_code=303)
+        cycle = connection.execute(
+            """WITH RECURSIVE reachable(id) AS (
+                SELECT blocked_id FROM ticket_links WHERE blocker_id = ?
+                UNION
+                SELECT links.blocked_id FROM ticket_links AS links JOIN reachable ON links.blocker_id = reachable.id
+            ) SELECT 1 FROM reachable WHERE id = ? LIMIT 1""",
+            (blocked_id, blocker_id),
+        ).fetchone()
+        if cycle:
+            return RedirectResponse(f"/tickets/{ticket_id}/edit?link_error=cycle", status_code=303)
+        connection.execute(
+            "INSERT INTO ticket_links (blocker_id, blocked_id, created_at) VALUES (?, ?, ?)",
+            (blocker_id, blocked_id, datetime.now(timezone.utc).isoformat(timespec="seconds")),
+        )
+    return RedirectResponse(f"/tickets/{ticket_id}/edit", status_code=303)
+
+
+@app.post("/tickets/{ticket_id}/links/{other_id}/delete")
+def remove_ticket_link(ticket_id: int, other_id: int):
+    with db() as connection:
+        get_ticket(connection, ticket_id)
+        connection.execute(
+            "DELETE FROM ticket_links WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)",
+            (ticket_id, other_id, other_id, ticket_id),
+        )
+    return RedirectResponse(f"/tickets/{ticket_id}/edit", status_code=303)
 
 
 @app.post("/tickets/{ticket_id}/edit")
@@ -228,6 +356,7 @@ def update_ticket(
     assignee: Annotated[str, Form()] = "",
     due_date: Annotated[str, Form()] = "",
     completion_notes: Annotated[str, Form()] = "",
+    is_recurring: Annotated[bool, Form()] = False,
 ):
     subject, description = validate_ticket(subject, description, priority, due_date)
     if status not in STATUSES:
@@ -239,11 +368,12 @@ def update_ticket(
         ticket = get_ticket(connection, ticket_id)
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         connection.execute(
-            "UPDATE tickets SET subject = ?, description = ?, priority = ?, status = ?, assignee = ?, due_date = ?, completion_notes = ?, completed_at = ?, updated_at = ? WHERE id = ?",
+            "UPDATE tickets SET subject = ?, description = ?, priority = ?, status = ?, assignee = ?, due_date = ?, completion_notes = ?, completed_at = ?, is_recurring = ?, recurring_checked = ?, recurring_checked_at = ?, updated_at = ? WHERE id = ?",
             (subject, description, priority, status, assignee.strip()[:80], due_date, completion_notes,
-             completion_date(ticket, status, now), now, ticket_id),
+             completion_date(ticket, status, now), int(is_recurring), ticket["recurring_checked"] if is_recurring else 0,
+             ticket["recurring_checked_at"] if is_recurring else "", now, ticket_id),
         )
-    return RedirectResponse("/archive" if ticket["archived_at"] else "/", status_code=303)
+    return RedirectResponse("/archive" if ticket["archived_at"] else "/recurring" if is_recurring else "/", status_code=303)
 
 
 @app.post("/tickets/{ticket_id}/move", response_class=HTMLResponse)
@@ -254,6 +384,8 @@ def move_ticket(request: Request, ticket_id: int, status: Annotated[str, Form()]
         ticket = get_ticket(connection, ticket_id)
         if ticket["archived_at"]:
             raise HTTPException(409, "Restore this ticket before moving it.")
+        if ticket["is_recurring"]:
+            raise HTTPException(409, "Recurring tickets are managed in the recurring checklist.")
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         connection.execute(
             "UPDATE tickets SET status = ?, completed_at = ?, updated_at = ? WHERE id = ?",
@@ -281,7 +413,7 @@ def restore_ticket(ticket_id: int):
                 "UPDATE tickets SET archived_at = '', updated_at = ? WHERE id = ?",
                 (datetime.now(timezone.utc).isoformat(timespec="seconds"), ticket_id),
             )
-    return RedirectResponse("/", status_code=303)
+    return RedirectResponse("/recurring" if ticket["is_recurring"] else "/", status_code=303)
 
 
 @app.post("/tickets/{ticket_id}/delete", response_class=HTMLResponse)
@@ -291,6 +423,8 @@ def delete_ticket(request: Request, ticket_id: int):
         connection.execute("DELETE FROM tickets WHERE id = ?", (ticket_id,))
     if ticket["archived_at"]:
         return RedirectResponse("/archive", status_code=303)
+    if ticket["is_recurring"]:
+        return RedirectResponse("/recurring", status_code=303)
     return board_response(request)
 
 

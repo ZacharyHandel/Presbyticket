@@ -33,6 +33,7 @@ class ReportTests(unittest.TestCase):
         main.initialize_database()
         ticket = main.completed_tickets()[0]
         self.assertEqual(ticket["archived_at"], "")
+        self.assertEqual(ticket["is_recurring"], 0)
         self.assertEqual(ticket["completed_at"], "2026-09-02")
         self.assertIn("PPW-001 — Site fix", main.report_text("September drop", [ticket]))
         self.assertIn("Fixed the church listing.", main.report_text("September drop", [ticket]))
@@ -77,6 +78,78 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(main.board_context(self.request())["total"], 1)
         with main.db() as connection:
             self.assertEqual(main.get_ticket(connection, 1)["archived_at"], "")
+
+    def test_ticket_links_are_directed_and_cycles_are_rejected(self):
+        main.initialize_database()
+        with main.db() as connection:
+            for name in ("First", "Second", "Third"):
+                connection.execute("INSERT INTO tickets (subject, description, priority, status, assignee, due_date, created_at, updated_at) VALUES (?, '', 'Medium', 'Backlog', '', '', '2026-09-01', '2026-09-01')", (name,))
+
+        main.add_ticket_link(1, 2, "blocks")
+        main.add_ticket_link(3, 2, "is_blocked_by")
+        with main.db() as connection:
+            self.assertEqual(connection.execute("SELECT blocker_id, blocked_id FROM ticket_links ORDER BY blocker_id").fetchall()[0][:], (1, 2))
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM ticket_links").fetchone()[0], 2)
+        board = main.board_context(self.request())
+        self.assertEqual(next(ticket["open_blockers"] for ticket in board["columns"]["Backlog"] if ticket["id"] == 2), 1)
+        self.assertIn("link_error=cycle", main.add_ticket_link(3, 1, "blocks").headers["location"])
+        self.assertIn("link_error=exists", main.add_ticket_link(2, 1, "is_blocked_by").headers["location"])
+        self.assertIn("link_error=self", main.add_ticket_link(1, 1, "blocks").headers["location"])
+
+        main.move_ticket(self.request(), 1, "Done")
+        board = main.board_context(self.request())
+        self.assertEqual(next(ticket["open_blockers"] for ticket in board["columns"]["Backlog"] if ticket["id"] == 2), 0)
+        main.archive_ticket(1)
+        with main.db() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM ticket_links").fetchone()[0], 2)
+        main.remove_ticket_link(2, 3)
+        with main.db() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM ticket_links").fetchone()[0], 1)
+        main.delete_ticket(self.request(), 1)
+        with main.db() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM ticket_links").fetchone()[0], 0)
+
+    def test_recurring_checklist_can_check_uncheck_and_reset_without_moving_tickets(self):
+        main.initialize_database()
+        created = main.create_ticket(self.request(), "First recurring", "Repeat this work", "Medium", "", "", True)
+        self.assertEqual(created.headers["location"], "/recurring")
+        main.create_ticket(self.request(), "Second recurring", "Repeat another task", "High", "", "", True)
+        main.create_ticket(self.request(), "One-time task", "Do once", "Low", "", "", False)
+        board = main.board_context(self.request())
+        self.assertEqual(board["total"], 1)
+        self.assertEqual([ticket["subject"] for ticket in board["columns"]["Backlog"]], ["One-time task"])
+        with self.assertRaises(Exception) as error:
+            main.move_ticket(self.request(), 1, "Done")
+        self.assertEqual(error.exception.status_code, 409)
+
+        main.check_recurring(1, 1)
+        main.check_recurring(2, 1)
+        with main.db() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM tickets WHERE recurring_checked = 1").fetchone()[0], 2)
+            self.assertTrue(main.get_ticket(connection, 1)["recurring_checked_at"])
+            self.assertEqual(main.get_ticket(connection, 1)["status"], "Backlog")
+        main.check_recurring(1, 0)
+        with main.db() as connection:
+            self.assertEqual(main.get_ticket(connection, 1)["recurring_checked_at"], "")
+        main.uncheck_all_recurring()
+        with main.db() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM tickets WHERE recurring_checked = 1").fetchone()[0], 0)
+
+        main.check_recurring(2, 1)
+        main.archive_ticket(2)
+        main.uncheck_all_recurring()
+        with main.db() as connection:
+            self.assertEqual(main.get_ticket(connection, 2)["recurring_checked"], 1)
+        main.update_ticket(1, "First recurring", "Repeat this work", "Medium", "Backlog", "", "", "", False)
+        with main.db() as connection:
+            self.assertEqual(main.get_ticket(connection, 1)["is_recurring"], 0)
+        self.assertEqual(main.board_context(self.request())["total"], 2)
+        updated = main.update_ticket(3, "One-time task", "Do once", "Low", "Backlog", "", "", "", True)
+        self.assertEqual(updated.headers["location"], "/recurring")
+        self.assertEqual(main.board_context(self.request())["total"], 1)
+        with self.assertRaises(Exception) as error:
+            main.check_recurring(1, 1)
+        self.assertEqual(error.exception.status_code, 409)
 
 
 if __name__ == "__main__":

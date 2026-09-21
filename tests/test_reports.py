@@ -173,6 +173,31 @@ class ReportTests(unittest.TestCase):
         self.assertEqual([ticket["subject"] for ticket in groups["Workspace"]], ["Workspace repeat"])
         self.assertEqual([ticket["subject"] for ticket in groups["Website"]], ["Website repeat"])
 
+    def test_subtickets_are_single_level_and_stay_on_their_board(self):
+        main.initialize_database()
+        main.create_board("Website")
+        main.create_ticket(self.request(), "Parent", "", "Medium", "", "", False, 1)
+        created = main.create_ticket(self.request(), "Existing child", "", "Medium", "", "", False, 1, 1)
+        self.assertEqual(created.headers["location"], "/tickets/1/edit")
+        main.create_ticket(self.request(), "Other board", "", "Medium", "", "", False, 2)
+
+        with main.db() as connection:
+            self.assertEqual(main.get_ticket(connection, 2)["parent_ticket_id"], 1)
+        board = main.board_context(self.request(), 1)
+        self.assertEqual([ticket["subject"] for ticket in board["columns"]["Backlog"]], ["Existing child", "Parent"])
+        self.assertEqual([ticket["subject"] for ticket in board["subtickets"][1]], ["Existing child"])
+
+        with self.assertRaises(Exception) as error:
+            main.create_ticket(self.request(), "Nested child", "", "Medium", "", "", False, 1, 2)
+        self.assertEqual(error.exception.status_code, 422)
+        with self.assertRaises(Exception) as error:
+            main.update_ticket(3, "Other board", "", "Medium", "Backlog", "", "", "", False, 1)
+        self.assertEqual(error.exception.status_code, 422)
+
+        main.archive_ticket(1)
+        with main.db() as connection:
+            self.assertIsNone(main.get_ticket(connection, 2)["parent_ticket_id"])
+
 
 if __name__ == "__main__":
     unittest.main()

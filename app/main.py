@@ -66,6 +66,7 @@ def initialize_database():
                 recurring_checked INTEGER NOT NULL DEFAULT 0,
                 recurring_checked_at TEXT NOT NULL DEFAULT '',
                 board_id INTEGER NOT NULL DEFAULT 1 REFERENCES boards(id),
+                parent_ticket_id INTEGER REFERENCES tickets(id) ON DELETE SET NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )"""
@@ -85,6 +86,8 @@ def initialize_database():
             connection.execute("ALTER TABLE tickets ADD COLUMN recurring_checked_at TEXT NOT NULL DEFAULT ''")
         if "board_id" not in columns:
             connection.execute("ALTER TABLE tickets ADD COLUMN board_id INTEGER NOT NULL DEFAULT 1")
+        if "parent_ticket_id" not in columns:
+            connection.execute("ALTER TABLE tickets ADD COLUMN parent_ticket_id INTEGER")
         connection.execute("UPDATE tickets SET completed_at = updated_at WHERE status = 'Done' AND completed_at = ''")
         connection.execute(
             """CREATE TABLE IF NOT EXISTS ticket_links (
@@ -97,6 +100,7 @@ def initialize_database():
         )
         connection.execute("CREATE INDEX IF NOT EXISTS idx_ticket_links_blocked ON ticket_links(blocked_id)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_tickets_board_id ON tickets(board_id)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_tickets_parent_ticket_id ON tickets(parent_ticket_id)")
 
 
 def all_boards() -> list[sqlite3.Row]:
@@ -123,6 +127,26 @@ def validate_board_name(name: str) -> str:
     if not name or len(name) > 80:
         raise HTTPException(422, "Board name must contain 1–80 characters.")
     return name
+
+
+def validate_parent_ticket(
+    connection: sqlite3.Connection, ticket_id: int | None, parent_ticket_id: int | None, board_id: int
+) -> None:
+    if parent_ticket_id is None:
+        return
+    if ticket_id == parent_ticket_id:
+        raise HTTPException(422, "A ticket cannot be its own sub-ticket.")
+    parent = get_ticket(connection, parent_ticket_id)
+    if parent["board_id"] != board_id:
+        raise HTTPException(422, "Sub-tickets must belong to the same board as their parent.")
+    if parent["archived_at"]:
+        raise HTTPException(422, "An archived ticket cannot be a sub-ticket parent.")
+    if parent["parent_ticket_id"] is not None:
+        raise HTTPException(422, "A sub-ticket cannot have sub-tickets.")
+    if ticket_id is not None and connection.execute(
+        "SELECT 1 FROM tickets WHERE parent_ticket_id = ? LIMIT 1", (ticket_id,)
+    ).fetchone():
+        raise HTTPException(422, "A ticket with sub-tickets cannot become a sub-ticket.")
 
 
 def validate_ticket(subject: str, description: str, priority: str, due_date: str) -> tuple[str, str]:
@@ -180,28 +204,34 @@ def board_context(request: Request, board_id: int = 1, q: str = "", priority: st
     q = q.strip()[:120]
     if priority not in PRIORITIES:
         priority = ""
-    sql = """SELECT tickets.*, (
+    sql = """SELECT tickets.*, parent.subject AS parent_subject, (
         SELECT COUNT(*) FROM ticket_links AS links
         JOIN tickets AS blocker ON blocker.id = links.blocker_id
         WHERE links.blocked_id = tickets.id AND blocker.status != 'Done'
-    ) AS open_blockers FROM tickets WHERE archived_at = '' AND is_recurring = 0 AND board_id = ?"""
+    ) AS open_blockers FROM tickets
+    LEFT JOIN tickets AS parent ON parent.id = tickets.parent_ticket_id
+    WHERE tickets.archived_at = '' AND tickets.is_recurring = 0 AND tickets.board_id = ?"""
     params: list[str | int] = [board_id]
     if q:
-        sql += " AND (subject LIKE ? OR description LIKE ? OR assignee LIKE ?)"
+        sql += " AND (tickets.subject LIKE ? OR tickets.description LIKE ? OR tickets.assignee LIKE ?)"
         params.extend([f"%{q}%"] * 3)
     if priority:
-        sql += " AND priority = ?"
+        sql += " AND tickets.priority = ?"
         params.append(priority)
-    sql += " ORDER BY CASE priority WHEN 'Urgent' THEN 0 WHEN 'High' THEN 1 WHEN 'Medium' THEN 2 ELSE 3 END, due_date = '', due_date, id DESC"
+    sql += " ORDER BY CASE tickets.priority WHEN 'Urgent' THEN 0 WHEN 'High' THEN 1 WHEN 'Medium' THEN 2 ELSE 3 END, tickets.due_date = '', tickets.due_date, tickets.id DESC"
     with db() as connection:
         board = get_board(connection, board_id)
         tickets = connection.execute(sql, params).fetchall()
         total = connection.execute("SELECT COUNT(*) FROM tickets WHERE archived_at = '' AND is_recurring = 0 AND board_id = ?", (board_id,)).fetchone()[0]
         completed = connection.execute("SELECT COUNT(*) FROM tickets WHERE status = 'Done' AND archived_at = '' AND is_recurring = 0 AND board_id = ?", (board_id,)).fetchone()[0]
+    subtickets = {ticket["id"]: [] for ticket in tickets if ticket["parent_ticket_id"] is None}
+    for ticket in tickets:
+        if ticket["parent_ticket_id"] in subtickets:
+            subtickets[ticket["parent_ticket_id"]].append(ticket)
     columns = {status: [ticket for ticket in tickets if ticket["status"] == status] for status in STATUSES}
     return {"request": request, "columns": columns, "statuses": STATUSES, "priorities": PRIORITIES,
             "q": q, "priority": priority, "total": total, "completed": completed, "today": date.today().isoformat(),
-            "board": board, "board_path": board_path(board_id)}
+            "board": board, "board_path": board_path(board_id), "subtickets": subtickets}
 
 
 def board_response(request: Request, board_id: int = 1):
@@ -256,8 +286,10 @@ def recurring(request: Request):
     with db() as connection:
         boards = connection.execute("SELECT * FROM boards ORDER BY id").fetchall()
         tickets = connection.execute(
-            """SELECT * FROM tickets WHERE is_recurring = 1 AND archived_at = ''
-            ORDER BY board_id, recurring_checked, CASE priority WHEN 'Urgent' THEN 0 WHEN 'High' THEN 1 WHEN 'Medium' THEN 2 ELSE 3 END, id DESC"""
+            """SELECT tickets.*, parent.subject AS parent_subject FROM tickets
+            LEFT JOIN tickets AS parent ON parent.id = tickets.parent_ticket_id
+            WHERE tickets.is_recurring = 1 AND tickets.archived_at = ''
+            ORDER BY tickets.board_id, tickets.recurring_checked, CASE tickets.priority WHEN 'Urgent' THEN 0 WHEN 'High' THEN 1 WHEN 'Medium' THEN 2 ELSE 3 END, tickets.id DESC"""
         ).fetchall()
     groups = [{"board": board, "tickets": [ticket for ticket in tickets if ticket["board_id"] == board["id"]]} for board in boards]
     checked = sum(ticket["recurring_checked"] for ticket in tickets)
@@ -323,16 +355,20 @@ def create_ticket(
     due_date: Annotated[str, Form()] = "",
     is_recurring: Annotated[bool, Form()] = False,
     board_id: Annotated[int, Form()] = 1,
+    parent_ticket_id: Annotated[int | None, Form()] = None,
 ):
     subject, description = validate_ticket(subject, description, priority, due_date)
     assignee = assignee.strip()[:80]
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with db() as connection:
         get_board(connection, board_id)
+        validate_parent_ticket(connection, None, parent_ticket_id, board_id)
         connection.execute(
-            "INSERT INTO tickets (subject, description, priority, status, assignee, due_date, is_recurring, board_id, created_at, updated_at) VALUES (?, ?, ?, 'Backlog', ?, ?, ?, ?, ?, ?)",
-            (subject, description, priority, assignee, due_date, int(is_recurring), board_id, now, now),
+            "INSERT INTO tickets (subject, description, priority, status, assignee, due_date, is_recurring, board_id, parent_ticket_id, created_at, updated_at) VALUES (?, ?, ?, 'Backlog', ?, ?, ?, ?, ?, ?, ?)",
+            (subject, description, priority, assignee, due_date, int(is_recurring), board_id, parent_ticket_id, now, now),
         )
+    if parent_ticket_id is not None:
+        return RedirectResponse(f"/tickets/{parent_ticket_id}/edit", status_code=303)
     if is_recurring:
         if request.headers.get("HX-Request") == "true":
             return HTMLResponse("", headers={"HX-Redirect": "/recurring"})
@@ -357,12 +393,20 @@ def edit_ticket(request: Request, ticket_id: int):
         ).fetchall()
         linked_ids = {row["id"] for row in blockers + blocked_tickets}
         linkable_tickets = [row for row in connection.execute("SELECT id, subject, status, archived_at FROM tickets WHERE id != ? ORDER BY subject", (ticket_id,)) if row["id"] not in linked_ids]
+        subtickets = connection.execute(
+            "SELECT * FROM tickets WHERE parent_ticket_id = ? ORDER BY archived_at, id", (ticket_id,)
+        ).fetchall()
+        parent_candidates = connection.execute(
+            "SELECT id, subject FROM tickets WHERE board_id = ? AND id != ? AND parent_ticket_id IS NULL AND archived_at = '' ORDER BY subject",
+            (ticket["board_id"], ticket_id),
+        ).fetchall()
     return_path = "/archive" if ticket["archived_at"] else "/recurring" if ticket["is_recurring"] else board_path(ticket["board_id"])
     return_label = "Archive" if ticket["archived_at"] else "Recurring" if ticket["is_recurring"] else "Board"
     errors = {"self": "A ticket cannot link to itself.", "exists": "These tickets are already linked.", "cycle": "This link would create a dependency cycle."}
     return templates.TemplateResponse(request, "edit.html", {
         "ticket": ticket, "statuses": STATUSES, "priorities": PRIORITIES,
         "blockers": blockers, "blocked_tickets": blocked_tickets, "linkable_tickets": linkable_tickets,
+        "subtickets": subtickets, "parent_candidates": parent_candidates,
         "link_error": errors.get(request.query_params.get("link_error", ""), ""),
         "return_path": return_path, "return_label": return_label,
     })
@@ -423,6 +467,7 @@ def update_ticket(
     due_date: Annotated[str, Form()] = "",
     completion_notes: Annotated[str, Form()] = "",
     is_recurring: Annotated[bool, Form()] = False,
+    parent_ticket_id: Annotated[int | None, Form()] = None,
 ):
     subject, description = validate_ticket(subject, description, priority, due_date)
     if status not in STATUSES:
@@ -432,12 +477,13 @@ def update_ticket(
         raise HTTPException(422, "Completion notes must be 5,000 characters or fewer.")
     with db() as connection:
         ticket = get_ticket(connection, ticket_id)
+        validate_parent_ticket(connection, ticket_id, parent_ticket_id, ticket["board_id"])
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         connection.execute(
-            "UPDATE tickets SET subject = ?, description = ?, priority = ?, status = ?, assignee = ?, due_date = ?, completion_notes = ?, completed_at = ?, is_recurring = ?, recurring_checked = ?, recurring_checked_at = ?, updated_at = ? WHERE id = ?",
+            "UPDATE tickets SET subject = ?, description = ?, priority = ?, status = ?, assignee = ?, due_date = ?, completion_notes = ?, completed_at = ?, is_recurring = ?, recurring_checked = ?, recurring_checked_at = ?, parent_ticket_id = ?, updated_at = ? WHERE id = ?",
             (subject, description, priority, status, assignee.strip()[:80], due_date, completion_notes,
              completion_date(ticket, status, now), int(is_recurring), ticket["recurring_checked"] if is_recurring else 0,
-             ticket["recurring_checked_at"] if is_recurring else "", now, ticket_id),
+             ticket["recurring_checked_at"] if is_recurring else "", parent_ticket_id, now, ticket_id),
         )
     return RedirectResponse("/archive" if ticket["archived_at"] else "/recurring" if is_recurring else board_path(ticket["board_id"]), status_code=303)
 
@@ -466,6 +512,7 @@ def archive_ticket(ticket_id: int):
         ticket = get_ticket(connection, ticket_id)
         if not ticket["archived_at"]:
             now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            connection.execute("UPDATE tickets SET parent_ticket_id = NULL, updated_at = ? WHERE parent_ticket_id = ?", (now, ticket_id))
             connection.execute("UPDATE tickets SET archived_at = ?, updated_at = ? WHERE id = ?", (now, now, ticket_id))
     return RedirectResponse("/archive", status_code=303)
 
@@ -486,6 +533,7 @@ def restore_ticket(ticket_id: int):
 def delete_ticket(request: Request, ticket_id: int):
     with db() as connection:
         ticket = get_ticket(connection, ticket_id)
+        connection.execute("UPDATE tickets SET parent_ticket_id = NULL, updated_at = ? WHERE parent_ticket_id = ?", (datetime.now(timezone.utc).isoformat(timespec="seconds"), ticket_id))
         connection.execute("DELETE FROM tickets WHERE id = ?", (ticket_id,))
     if ticket["archived_at"]:
         return RedirectResponse("/archive", status_code=303)

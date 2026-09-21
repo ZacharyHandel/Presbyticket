@@ -11,10 +11,17 @@
       <label>Description<textarea name="description" maxlength="5000" rows="6">{{ ticket.description }}</textarea></label>
       <div class="form-grid"><label>Priority<select name="priority">{% for item in priorities %}<option {% if ticket.priority == item %}selected{% endif %}>{{ item }}</option>{% endfor %}</select></label><label>Status<select name="status">{% for item in statuses %}<option {% if ticket.status == item %}selected{% endif %}>{{ item }}</option>{% endfor %}</select></label></div>
       <div class="form-grid"><label>Assignee<input name="assignee" maxlength="80" value="{{ ticket.assignee }}" placeholder="Who owns this?"></label><label>Due date<input type="date" name="due_date" value="{{ ticket.due_date }}"></label></div>
+      <label>Parent ticket <small>Sub-tickets stay within this board and cannot have sub-tickets of their own.</small><select name="parent_ticket_id" {% if subtickets %}disabled{% endif %}><option value="">No parent — top-level ticket</option>{% for parent in parent_candidates %}<option value="{{ parent.id }}" {% if ticket.parent_ticket_id == parent.id %}selected{% endif %}>T-{{ '%03d'|format(parent.id) }} · {{ parent.subject }}</option>{% endfor %}</select>{% if subtickets %}<small>This ticket has sub-tickets, so it must remain top-level.</small>{% endif %}</label>
+      {% if subtickets %}<input type="hidden" name="parent_ticket_id" value="">{% endif %}
       <label>Completion notes <small>Optional details about what was delivered</small><textarea name="completion_notes" maxlength="5000" rows="4" placeholder="Summarize the completed work for the drop report...">{{ ticket.completion_notes }}</textarea></label>
       <label class="recurring-option"><input type="checkbox" name="is_recurring" value="true" {% if ticket.is_recurring %}checked{% endif %}> Recurring task <small>Show on the recurring checklist instead of the board.</small></label>
       <div class="form-actions"><a class="secondary-button" href="{{ return_path }}">Cancel</a><button class="primary-button" type="submit">Save changes</button></div>
     </form>
+    <section class="subtickets-zone" aria-labelledby="subtickets-title">
+      <div class="links-heading"><h2 id="subtickets-title">Sub-tickets</h2><p>Break this ticket into smaller pieces of work.</p></div>
+      {% if subtickets %}<div class="linked-list">{% for child in subtickets %}<div class="linked-ticket"><div><a href="/tickets/{{ child.id }}/edit">{{ child.subject }}</a><small>{{ child.status }}{% if child.archived_at %} · Archived{% endif %}</small></div><a class="text-button" href="/tickets/{{ child.id }}/edit">Edit</a></div>{% endfor %}</div>{% else %}<p class="links-empty">No sub-tickets yet.</p>{% endif %}
+      {% if not ticket.parent_ticket_id %}<form class="subticket-form" action="/tickets" method="post"><input type="hidden" name="board_id" value="{{ ticket.board_id }}"><input type="hidden" name="parent_ticket_id" value="{{ ticket.id }}"><label>New sub-ticket<input name="subject" maxlength="120" required placeholder="What part needs to be done?"></label><button type="submit" class="secondary-button">Add sub-ticket</button></form>{% else %}<p class="links-empty">This ticket is already a sub-ticket and cannot contain sub-tickets.</p>{% endif %}
+    </section>
     <section class="links-zone" aria-labelledby="links-title">
       <div class="links-heading"><h2 id="links-title">Ticket links</h2><p>Track work that must happen before other tickets.</p></div>
       <div class="links-grid">

@@ -122,3 +122,39 @@ document.addEventListener('drop', async event => {
     window.location.reload();
   } catch (error) { alert(error.message); }
 });
+const detailsDialog = document.getElementById('ticket-details-dialog');
+let detailsRequest = null;
+document.addEventListener('click', async event => {
+  if (event.target.closest('[data-close-details]')) {
+    detailsDialog.close();
+    return;
+  }
+  const link = event.target.closest('a[data-ticket-details]');
+  if (!link || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+  event.preventDefault();
+  detailsRequest?.abort();
+  const controller = new AbortController();
+  detailsRequest = controller;
+  detailsDialog.innerHTML = '<div class="dialog-head"><h2 id="ticket-details-title">Loading ticket…</h2><button type="button" class="icon-button" data-close-details aria-label="Close ticket details">×</button></div><p role="status">Loading details…</p>';
+  if (!detailsDialog.open) detailsDialog.showModal();
+  try {
+    const response = await fetch(link.href + '?fragment=true', { signal: controller.signal });
+    if (!response.ok) throw new Error('Unable to load ticket details.');
+    const html = await response.text();
+    if (controller.signal.aborted) return;
+    detailsDialog.innerHTML = html;
+    detailsDialog.scrollTop = 0;
+    detailsDialog.querySelector('[data-close-details]')?.focus();
+  } catch (error) {
+    if (error.name === 'AbortError') return;
+    detailsDialog.querySelector('h2').textContent = 'Ticket details unavailable';
+    detailsDialog.querySelector('[role="status"]').textContent = 'Could not load this ticket. Close this dialog and try again.';
+  }
+});
+detailsDialog?.addEventListener('click', event => {
+  if (event.target === detailsDialog) {
+    const bounds = detailsDialog.getBoundingClientRect();
+    if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) detailsDialog.close();
+  }
+});
+detailsDialog?.addEventListener('close', () => detailsRequest?.abort());

@@ -1,0 +1,23 @@
+<div class="dialog-head">
+  <div><div class="eyebrow">TICKET T-{{ '%03d'|format(ticket.id) }}{% if ticket.archived_at %} · ARCHIVED{% endif %}</div><h2 id="ticket-details-title">{{ ticket.subject }}</h2></div>
+  <button type="button" class="icon-button details-dialog-close" data-close-details aria-label="Close ticket details">×</button>
+</div>
+<dl class="ticket-details-fields">
+  <div><dt>Board</dt><dd>{{ board.name }}</dd></div>
+  <div><dt>Status</dt><dd>{{ ticket.status }}</dd></div>
+  <div><dt>Priority</dt><dd><span class="priority priority-{{ ticket.priority|lower }}">{{ ticket.priority }}</span></dd></div>
+  <div><dt>Assignee</dt><dd>{{ ticket.assignee or 'Unassigned' }}</dd></div>
+  <div><dt>Due date</dt><dd>{{ ticket.due_date or 'No due date' }}</dd></div>
+  {% if ticket.is_recurring %}<div><dt>Recurring checklist</dt><dd>{{ 'Checked' if ticket.recurring_checked else 'Not checked' }}</dd></div>{% endif %}
+  <div><dt>Created</dt><dd>{{ ticket.created_at[:10] }}</dd></div>
+  <div><dt>Updated</dt><dd>{{ ticket.updated_at[:10] }}</dd></div>
+  {% if ticket.completed_at %}<div><dt>Completed</dt><dd>{{ ticket.completed_at[:10] }}</dd></div>{% endif %}
+  {% if ticket.archived_at %}<div><dt>Archived</dt><dd>{{ ticket.archived_at[:10] }}</dd></div>{% endif %}
+</dl>
+<section class="ticket-details-section"><h3>Description</h3><p class="ticket-details-text">{{ ticket.description or 'No description provided.' }}</p></section>
+{% if ticket.completion_notes %}<section class="ticket-details-section"><h3>Completion notes</h3><p class="ticket-details-text">{{ ticket.completion_notes }}</p></section>{% endif %}
+{% if parent %}<section class="ticket-details-section"><h3>Parent ticket</h3><a data-ticket-details href="/tickets/{{ parent.id }}">{{ parent.subject }}</a></section>{% endif %}
+{% for label, related in [('Sub-tickets', subtickets), ('Is blocked by', blockers), ('Blocks', blocked_tickets)] %}
+{% if related %}<section class="ticket-details-section"><h3>{{ label }}</h3><ul>{% for other in related %}<li><a data-ticket-details href="/tickets/{{ other.id }}">{{ other.subject }}</a> <small>{{ other.status }}{% if other.archived_at %} · Archived{% endif %}</small></li>{% endfor %}</ul></section>{% endif %}
+{% endfor %}
+<div class="form-actions"><button type="button" class="secondary-button details-dialog-close" data-close-details>Close</button><a class="primary-button" href="/tickets/{{ ticket.id }}/edit">Edit ticket</a></div>

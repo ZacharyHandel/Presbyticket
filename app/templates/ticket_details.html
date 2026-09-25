@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}{{ ticket.subject }} · Presby Ticket{% endblock %}
+{% block content %}
+<div class="page-content edit-page">
+  <a class="back-link" href="{{ return_path }}">← Back to tickets</a>
+  <div class="edit-panel ticket-details-page">{% include "ticket_details_content.html" %}</div>
+</div>
+{% endblock %}

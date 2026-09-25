@@ -379,6 +379,30 @@ def create_ticket(
     return response
 
 
+@app.get("/tickets/{ticket_id}", response_class=HTMLResponse)
+def ticket_details(request: Request, ticket_id: int, fragment: bool = False):
+    with db() as connection:
+        ticket = get_ticket(connection, ticket_id)
+        board = get_board(connection, ticket["board_id"])
+        parent = get_ticket(connection, ticket["parent_ticket_id"]) if ticket["parent_ticket_id"] else None
+        subtickets = connection.execute(
+            "SELECT * FROM tickets WHERE parent_ticket_id = ? ORDER BY archived_at, id", (ticket_id,)
+        ).fetchall()
+        blockers = connection.execute(
+            "SELECT tickets.* FROM tickets JOIN ticket_links ON tickets.id = blocker_id WHERE blocked_id = ?",
+            (ticket_id,),
+        ).fetchall()
+        blocked_tickets = connection.execute(
+            "SELECT tickets.* FROM tickets JOIN ticket_links ON tickets.id = blocked_id WHERE blocker_id = ?",
+            (ticket_id,),
+        ).fetchall()
+    return_path = "/archive" if ticket["archived_at"] else "/recurring" if ticket["is_recurring"] else board_path(ticket["board_id"])
+    return templates.TemplateResponse(request, "ticket_details_content.html" if fragment else "ticket_details.html", {
+        "ticket": ticket, "board": board, "parent": parent, "subtickets": subtickets,
+        "blockers": blockers, "blocked_tickets": blocked_tickets, "return_path": return_path,
+    })
+
+
 @app.get("/tickets/{ticket_id}/edit", response_class=HTMLResponse)
 def edit_ticket(request: Request, ticket_id: int):
     with db() as connection:

@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Presby Ticket{% endblock %}</title>
   <script>try { if (localStorage.getItem('presbyticket-theme') === 'dark') document.documentElement.dataset.theme = 'dark'; } catch (_) {}</script>
-  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}?v=archive-all-compact">
+  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}?v=priority-picker">
   <script src="https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js" defer></script>
-  <script src="{{ url_for('static', path='app.js') }}" defer></script>
+  <script src="{{ url_for('static', path='app.js') }}?v=priority-picker" defer></script>
 </head>
 <body>
   <div class="app-shell">

@@ -57,6 +57,39 @@ document.body.addEventListener('ticketCreated', () => {
 });
 
 let draggedId = null;
+// Keep native controls usable inside draggable cards.
+document.addEventListener('pointerdown', event => {
+  const picker = event.target.closest('[data-priority-picker]');
+  const card = picker?.closest('.ticket-card');
+  if (card) card.draggable = false;
+});
+document.addEventListener('pointerup', () => {
+  document.querySelectorAll('.ticket-card').forEach(card => { card.draggable = true; });
+});
+document.addEventListener('change', async event => {
+  const picker = event.target.closest('[data-priority-picker]');
+  if (!picker) return;
+  const previous = picker.dataset.savedPriority;
+  picker.disabled = true;
+  try {
+    const response = await fetch(`/tickets/${picker.dataset.ticketId}/priority`, {
+      method: 'POST', body: new URLSearchParams({ priority: picker.value }),
+    });
+    if (!response.ok) throw new Error('Could not save priority. Please try again.');
+    const result = await response.json();
+    picker.classList.remove(`priority-${previous.toLowerCase()}`);
+    picker.classList.add(`priority-${result.priority.toLowerCase()}`);
+    picker.dataset.savedPriority = result.priority;
+    picker.value = result.priority;
+    // Reapply board filters and priority sorting after a change.
+    if (picker.closest('.ticket-card')) window.location.reload();
+  } catch (error) {
+    picker.value = previous;
+    alert(error.message);
+  } finally {
+    picker.disabled = false;
+  }
+});
 document.addEventListener('dragstart', event => {
   const card = event.target.closest('.ticket-card');
   if (!card) return;

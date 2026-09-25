@@ -1,0 +1,3 @@
+<select class="priority priority-{{ ticket.priority|lower }} priority-picker" data-priority-picker data-ticket-id="{{ ticket.id }}" data-saved-priority="{{ ticket.priority }}" aria-label="Priority for {{ ticket.subject }}" title="Change priority">
+  {% for level in ('Low', 'Medium', 'High', 'Urgent') %}<option value="{{ level }}" {% if ticket.priority == level %}selected{% endif %}>{{ level }}</option>{% endfor %}
+</select>

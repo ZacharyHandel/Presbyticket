@@ -488,6 +488,21 @@ def update_ticket(
     return RedirectResponse("/archive" if ticket["archived_at"] else "/recurring" if is_recurring else board_path(ticket["board_id"]), status_code=303)
 
 
+@app.post("/tickets/{ticket_id}/priority")
+def change_priority(ticket_id: int, priority: Annotated[str, Form()]):
+    if priority not in PRIORITIES:
+        raise HTTPException(422, "Invalid priority.")
+    with db() as connection:
+        ticket = get_ticket(connection, ticket_id)
+        if ticket["archived_at"]:
+            raise HTTPException(409, "Restore this ticket before changing its priority.")
+        connection.execute(
+            "UPDATE tickets SET priority = ?, updated_at = ? WHERE id = ?",
+            (priority, datetime.now(timezone.utc).isoformat(timespec="seconds"), ticket_id),
+        )
+    return {"priority": priority}
+
+
 @app.post("/tickets/{ticket_id}/move", response_class=HTMLResponse)
 def move_ticket(request: Request, ticket_id: int, status: Annotated[str, Form()]):
     if status not in STATUSES:

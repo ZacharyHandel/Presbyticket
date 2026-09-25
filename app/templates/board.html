@@ -7,7 +7,7 @@
       <div class="card-list">
         {% for ticket in tickets %}
         <article class="ticket-card" draggable="true" data-ticket-id="{{ ticket.id }}">
-          <div class="card-top"><span class="ticket-id">T-{{ '%03d'|format(ticket.id) }}</span><div class="card-badges">{% if ticket.parent_ticket_id %}<span class="subticket-badge">Parent: {{ ticket.parent_subject }}</span>{% endif %}<span class="priority priority-{{ ticket.priority|lower }}"><span class="priority-dot"></span>{{ ticket.priority }}</span></div></div>
+          <div class="card-top"><span class="ticket-id">T-{{ '%03d'|format(ticket.id) }}</span><div class="card-badges">{% if ticket.parent_ticket_id %}<span class="subticket-badge">Parent: {{ ticket.parent_subject }}</span>{% endif %}{% include "priority_badge.html" %}</div></div>
           <a class="card-title" href="/tickets/{{ ticket.id }}/edit">{{ ticket.subject }}</a>
           {% if ticket.description %}<p class="card-description">{{ ticket.description }}</p>{% endif %}
           {% if ticket.open_blockers and status != 'Done' %}<div class="dependency-badge">⛓ Blocked by {{ ticket.open_blockers }}</div>{% endif %}

@@ -3,7 +3,7 @@
     {% for status, tickets in columns.items() %}
     {% set slug = status|lower|replace(' ', '-') %}
     <section class="board-column" data-status="{{ status }}" aria-label="{{ status }} tickets">
-      <div class="column-heading"><div class="column-title"><span class="column-dot {{ slug }}"></span><h3>{{ status }}</h3><span class="count">{{ tickets|length }}</span></div><span class="column-more">···</span></div>
+      <div class="column-heading"><div class="column-title"><span class="column-dot {{ slug }}"></span><h3>{{ status }}</h3><span class="count">{{ tickets|length }}</span>{% if status == 'Done' and tickets %}<form action="/boards/{{ board.id }}/done/archive" method="post" hx-post="/boards/{{ board.id }}/done/archive" hx-target="#board-shell" hx-swap="outerHTML"><button class="primary-button archive-all-button" type="submit">Archive All</button></form>{% endif %}</div><span class="column-more">···</span></div>
       <div class="card-list">
         {% for ticket in tickets %}
         <article class="ticket-card" draggable="true" data-ticket-id="{{ ticket.id }}">

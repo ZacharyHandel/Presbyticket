@@ -517,6 +517,27 @@ def archive_ticket(ticket_id: int):
     return RedirectResponse("/archive", status_code=303)
 
 
+@app.post("/boards/{board_id}/done/archive", response_class=HTMLResponse)
+def archive_done_tickets(request: Request, board_id: int):
+    with db() as connection:
+        get_board(connection, board_id)
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        connection.execute(
+            """UPDATE tickets SET parent_ticket_id = NULL, updated_at = ?
+            WHERE parent_ticket_id IN (
+                SELECT id FROM tickets
+                WHERE board_id = ? AND status = 'Done' AND archived_at = '' AND is_recurring = 0
+            )""",
+            (now, board_id),
+        )
+        connection.execute(
+            """UPDATE tickets SET archived_at = ?, updated_at = ?
+            WHERE board_id = ? AND status = 'Done' AND archived_at = '' AND is_recurring = 0""",
+            (now, now, board_id),
+        )
+    return board_response(request, board_id)
+
+
 @app.post("/tickets/{ticket_id}/restore")
 def restore_ticket(ticket_id: int):
     with db() as connection:

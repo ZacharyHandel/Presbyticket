@@ -79,6 +79,40 @@ class ReportTests(unittest.TestCase):
         with main.db() as connection:
             self.assertEqual(main.get_ticket(connection, 1)["archived_at"], "")
 
+    def test_archive_all_done_archives_only_active_done_tickets_on_the_current_board(self):
+        main.initialize_database()
+        main.create_board("Website")
+        with main.db() as connection:
+            tickets = (
+                ("Done one", "Done", 0, 1),
+                ("Done two", "Done", 0, 1),
+                ("Still active", "In progress", 0, 1),
+                ("Recurring done", "Done", 1, 1),
+                ("Other board done", "Done", 0, 2),
+            )
+            for subject, status, recurring, board_id in tickets:
+                connection.execute(
+                    """INSERT INTO tickets
+                    (subject, description, priority, status, assignee, due_date, is_recurring, board_id, created_at, updated_at)
+                    VALUES (?, '', 'Medium', ?, '', '', ?, ?, '2026-09-01', '2026-09-01')""",
+                    (subject, status, recurring, board_id),
+                )
+
+        response = main.archive_done_tickets(self.request(), 1)
+        self.assertEqual(response.headers["location"], "/")
+        with main.db() as connection:
+            archived = {
+                ticket["subject"]: bool(ticket["archived_at"])
+                for ticket in connection.execute("SELECT subject, archived_at FROM tickets")
+            }
+        self.assertEqual(archived, {
+            "Done one": True,
+            "Done two": True,
+            "Still active": False,
+            "Recurring done": False,
+            "Other board done": False,
+        })
+
     def test_ticket_links_are_directed_and_cycles_are_rejected(self):
         main.initialize_database()
         with main.db() as connection:
